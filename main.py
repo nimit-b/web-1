@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 import requests
 from bs4 import BeautifulSoup
-import json
 import time
 import random
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +9,7 @@ import uvicorn
 
 app = FastAPI()
 
-# ✅ Allow all CORS for frontend access
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,18 +18,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Add headers and session for scraping
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+# Common Headers (Avoid blocks)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                  " AppleWebKit/537.36 (KHTML, like Gecko)"
+                  " Chrome/120.0.0.0 Safari/537.36"
 }
-session = requests.Session()
-session.headers.update(headers)
+
+
+def fetch_html(url: str):
+    """Fetch and return parsed HTML soup"""
+    time.sleep(random.uniform(0.5, 1.2))  # be polite
+    res = requests.get(url, headers=HEADERS)
+    res.raise_for_status()
+    return BeautifulSoup(res.text, "html.parser")
 
 
 @app.get("/")
 def home():
     return {
-        "message": "🎬 Smart Bros Movie Wiki Scraper API is running 🚀",
+        "message": "🎬 Smart Bros Real IMDb Scraper API is LIVE 🚀",
         "endpoints": [
             "/scrape/imdb_top_picks",
             "/scrape/imdb_fan_favorites",
@@ -40,76 +47,140 @@ def home():
     }
 
 
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
-
-
 @app.get("/scrape/imdb_top_picks")
 def scrape_imdb_top_picks():
+    """Scrape IMDb's Top Picks section"""
     try:
-        url = "https://www.imdb.com/what-to-watch/top-picks/?ref_=hm_tpks_sm"
-        response = session.get(url)
-        response.raise_for_status()
-        time.sleep(random.uniform(0.5, 1.5))
+        url = "https://www.imdb.com/chart/top/"
+        soup = fetch_html(url)
 
-        items = [
-            {"title": "The Marvels", "year": "2023", "imdb_id": "tt10676012", "image": "https://m.media-amazon.com/images/M/MV5BM2U2ZWM4ZjEtNjI5YS00Njg4LTk5MzMtZjViZThkMjU2NGE0XkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "6.2"},
-            {"title": "Killers of the Flower Moon", "year": "2023", "imdb_id": "tt5363918", "image": "https://m.media-amazon.com/images/M/MV5BN2U0YmU1Y2EtNTNlOS00MzJjLTk4NDQtMDJiOTFmOTJjYjYyXkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "8.1"}
-        ]
-        return {"items": items, "count": len(items)}
+        movies = []
+        for row in soup.select("li.ipc-metadata-list-summary-item")[:10]:
+            title_tag = row.select_one("h3")
+            title = title_tag.text.strip() if title_tag else "N/A"
+
+            rating_tag = row.select_one("span.ipc-rating-star")
+            rating = rating_tag.text.strip() if rating_tag else "N/A"
+
+            image_tag = row.select_one("img.ipc-image")
+            image = image_tag["src"] if image_tag else ""
+
+            link_tag = row.select_one("a.ipc-title-link-wrapper")
+            imdb_id = ""
+            if link_tag and "href" in link_tag.attrs:
+                imdb_id = link_tag["href"].split("/")[2]
+
+            movies.append({
+                "title": title,
+                "rating": rating,
+                "imdb_id": imdb_id,
+                "image": image
+            })
+
+        return {"count": len(movies), "items": movies}
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/scrape/imdb_fan_favorites")
-def scrape_imdb_fan_favorites():
+def scrape_fan_favorites():
+    """Scrape IMDb Fan Favorites section"""
     try:
-        url = "https://www.imdb.com/what-to-watch/fan-favorites/?ref_=watch_tpks_tb"
-        response = session.get(url)
-        response.raise_for_status()
-        time.sleep(random.uniform(0.5, 1.5))
+        url = "https://www.imdb.com/what-to-watch/fan-favorites/"
+        soup = fetch_html(url)
 
-        items = [
-            {"title": "Spider-Man: Across the Spider-Verse", "year": "2023", "imdb_id": "tt9362722", "image": "https://m.media-amazon.com/images/M/MV5BMzI0NmVkMjEtYmY4MS00ZDMxLTlkZmEtMzU4MDljM2U1YjYzXkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "8.7"},
-            {"title": "Guardians of the Galaxy Vol. 3", "year": "2023", "imdb_id": "tt6791350", "image": "https://m.media-amazon.com/images/M/MV5BZGMwOGIwZjUtOWM1Mi00YzJmLWE1YjItN2E5Mzg4Yjk2NzJkXkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "7.9"}
-        ]
-        return {"items": items, "count": len(items)}
+        movies = []
+        for div in soup.select("div.ipc-poster-card")[:10]:
+            title_tag = div.select_one("img")
+            title = title_tag["alt"] if title_tag else "N/A"
+
+            image = title_tag["src"] if title_tag else ""
+            link_tag = div.select_one("a")
+            imdb_id = link_tag["href"].split("/")[2] if link_tag else "N/A"
+
+            rating_tag = div.select_one("span.ipc-rating-star")
+            rating = rating_tag.text.strip() if rating_tag else "N/A"
+
+            movies.append({
+                "title": title,
+                "rating": rating,
+                "imdb_id": imdb_id,
+                "image": image
+            })
+
+        return {"count": len(movies), "items": movies}
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/scrape/imdb_popular")
 def scrape_imdb_popular():
+    """Scrape IMDb Popular movies"""
     try:
-        url = "https://www.imdb.com/what-to-watch/popular/?ref_=watch_fanfav_tb"
-        response = session.get(url)
-        response.raise_for_status()
-        time.sleep(random.uniform(0.5, 1.5))
+        url = "https://www.imdb.com/chart/moviemeter/"
+        soup = fetch_html(url)
 
-        items = [
-            {"title": "Oppenheimer", "year": "2023", "imdb_id": "tt15398776", "image": "https://m.media-amazon.com/images/M/MV5BMjBmNGY3ZGItZmFjYS00OWU3LTkzNzAtYjM5ZmE0NjFiYzE2XkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "8.7"},
-            {"title": "Barbie", "year": "2023", "imdb_id": "tt1517268", "image": "https://m.media-amazon.com/images/M/MV5BNjU3N2QxNzYtMjk1NC00MTc4LTk1NTQtMmUxNTljM2I0NDA5XkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "7.0"}
-        ]
-        return {"items": items, "count": len(items)}
+        movies = []
+        for row in soup.select("li.ipc-metadata-list-summary-item")[:10]:
+            title_tag = row.select_one("h3")
+            title = title_tag.text.strip() if title_tag else "N/A"
+
+            link_tag = row.select_one("a.ipc-title-link-wrapper")
+            imdb_id = link_tag["href"].split("/")[2] if link_tag else "N/A"
+
+            image_tag = row.select_one("img.ipc-image")
+            image = image_tag["src"] if image_tag else ""
+
+            rating_tag = row.select_one("span.ipc-rating-star")
+            rating = rating_tag.text.strip() if rating_tag else "N/A"
+
+            movies.append({
+                "title": title,
+                "rating": rating,
+                "imdb_id": imdb_id,
+                "image": image
+            })
+
+        return {"count": len(movies), "items": movies}
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/scrape/latest")
 def scrape_latest_movies():
+    """Scrape IMDb Latest Releases"""
     try:
-        time.sleep(random.uniform(0.5, 1.5))
-        items = [
-            {"title": "Dune: Part Two", "year": "2024", "imdb_id": "tt15239678", "image": "https://m.media-amazon.com/images/M/MV5BZjg2Y2ZmM2QtZjQ1ZS00ZmQxLWEwYzUtYjI1ZTNmNjY2MjYyXkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "8.8"},
-            {"title": "Wonka", "year": "2023", "imdb_id": "tt6163094", "image": "https://m.media-amazon.com/images/M/MV5BZjViNWU5YzYtZDA3NC00MWFhLWI2ZWMtZTQ5NGNmYjVhZjM0XkEyXkFqcGc@._V1_FMjpg_UX1000_.jpg", "rating": "7.2"}
-        ]
-        return {"items": items, "count": len(items)}
+        url = "https://www.imdb.com/movies-in-theaters/"
+        soup = fetch_html(url)
+
+        movies = []
+        for movie_div in soup.select("div.list_item")[:10]:
+            title_tag = movie_div.select_one("h4 a")
+            title = title_tag.text.strip() if title_tag else "N/A"
+
+            imdb_id = ""
+            if title_tag and "href" in title_tag.attrs:
+                imdb_id = title_tag["href"].split("/")[2]
+
+            image_tag = movie_div.select_one("img.poster")
+            image = image_tag["src"] if image_tag else ""
+
+            summary_tag = movie_div.select_one("div.outline")
+            summary = summary_tag.text.strip() if summary_tag else "N/A"
+
+            movies.append({
+                "title": title,
+                "imdb_id": imdb_id,
+                "image": image,
+                "summary": summary
+            })
+
+        return {"count": len(movies), "items": movies}
     except Exception as e:
         return {"error": str(e)}
 
 
-# ✅ Important: make sure Railway runs this app correctly
+# Run the API (for Railway/Render)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
