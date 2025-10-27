@@ -1,12 +1,13 @@
 from fastapi import FastAPI
-import requests
 from fastapi.middleware.cors import CORSMiddleware
-import os
-import uvicorn
+import requests
+from bs4 import BeautifulSoup
+import random
+import time
 
-app = FastAPI()
+app = FastAPI(title="IMDb Hybrid Scraper API", version="2.0")
 
-# Enable CORS
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,120 +17,210 @@ app.add_middleware(
 )
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                  " AppleWebKit/537.36 (KHTML, like Gecko)"
-                  " Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 }
 
-BASE_URL = "https://v3.sg.media-imdb.com/suggestion/"
+# --- Helper Functions ---
 
-# Utility to fetch IMDb suggestion API
-def imdb_json(letter: str, query: str):
-    url = f"{BASE_URL}{letter}/{query}.json"
-    res = requests.get(url, headers=HEADERS)
-    if res.status_code == 200:
-        return res.json()
-    return None
+def delay():
+    """Small delay to reduce scraping load."""
+    time.sleep(random.uniform(0.5, 1.5))
 
+def fetch_html(url: str):
+    """Safely fetch HTML content."""
+    response = requests.get(url, headers=HEADERS, timeout=10)
+    response.raise_for_status()
+    return BeautifulSoup(response.text, "html.parser")
+
+
+# --- Routes ---
 
 @app.get("/")
-def home():
+def root():
     return {
-        "message": "🎬 Smart Bros IMDb Hidden API Scraper is LIVE 🚀",
+        "message": "🎬 IMDb Hybrid Scraper API",
+        "version": "2.0",
         "endpoints": [
+            "/health",
             "/search/{query}",
-            "/trending",
-            "/fan_favorites",
-            "/top_movies"
+            "/details/{imdb_id}",
+            "/top_movies",
+            "/top_tv",
+            "/coming_soon",
+            "/by_genre/{genre}",
+            "/actor/{actor_name}"
         ]
     }
 
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+# --- SEARCH ---
 
 @app.get("/search/{query}")
-def search_imdb(query: str):
-    """Search movies or shows using IMDb’s hidden JSON API"""
-    letter = query[0].lower()
-    data = imdb_json(letter, query)
-    if not data or "d" not in data:
-        return {"count": 0, "items": []}
+def search(query: str):
+    """Search IMDb using public suggestion API."""
+    try:
+        url = f"https://v2.sg.media-imdb.com/suggestion/{query[0].lower()}/{query}.json"
+        res = requests.get(url, headers=HEADERS)
+        data = res.json()
+        results = []
+        for item in data.get("d", []):
+            results.append({
+                "title": item.get("l"),
+                "type": item.get("qid", "movie"),
+                "year": item.get("y"),
+                "imdb_id": item.get("id"),
+                "image": item.get("i", {}).get("imageUrl") if isinstance(item.get("i"), dict) else item.get("i", [None, None])[0]
+            })
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        return {"error": str(e)}
 
-    movies = []
-    for item in data["d"]:
-        if "id" not in item:
-            continue
-        movies.append({
-            "title": item.get("l", "N/A"),
-            "year": item.get("y", "N/A"),
-            "imdb_id": item.get("id"),
-            "type": item.get("q", "N/A"),
-            "image": item.get("i", {}).get("imageUrl") if "i" in item else "",
-            "actors": item.get("s", "").split(", ") if "s" in item else [],
-        })
-    return {"count": len(movies), "items": movies}
+# --- DETAILS ---
 
+@app.get("/details/{imdb_id}")
+def details(imdb_id: str):
+    """Fetch movie details using IMDb mirror API."""
+    try:
+        url = f"https://imdb.iamidiotareyoutoo.com/search/{imdb_id}"
+        res = requests.get(url, headers=HEADERS)
+        data = res.json()
+        return {
+            "title": data.get("title"),
+            "year": data.get("year"),
+            "rating": data.get("rating"),
+            "plot": data.get("plot"),
+            "genres": data.get("genres"),
+            "directors": data.get("directors"),
+            "stars": data.get("stars"),
+            "image": data.get("poster"),
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
-@app.get("/trending")
-def trending():
-    """Get trending movies/shows"""
-    # IMDb’s trending list is often around "trending"
-    data = imdb_json("t", "trending")
-    if not data or "d" not in data:
-        return {"count": 0, "items": []}
-
-    movies = []
-    for item in data["d"]:
-        movies.append({
-            "title": item.get("l", "N/A"),
-            "year": item.get("y", "N/A"),
-            "imdb_id": item.get("id"),
-            "type": item.get("q", "N/A"),
-            "image": item.get("i", {}).get("imageUrl") if "i" in item else "",
-            "actors": item.get("s", "").split(", ") if "s" in item else [],
-        })
-    return {"count": len(movies), "items": movies}
-
-
-@app.get("/fan_favorites")
-def fan_favorites():
-    """Simulate IMDb fan favorites using related keyword"""
-    data = imdb_json("f", "fan favorites")
-    if not data or "d" not in data:
-        return {"count": 0, "items": []}
-
-    movies = []
-    for item in data["d"]:
-        movies.append({
-            "title": item.get("l", "N/A"),
-            "year": item.get("y", "N/A"),
-            "imdb_id": item.get("id"),
-            "type": item.get("q", "N/A"),
-            "image": item.get("i", {}).get("imageUrl") if "i" in item else "",
-            "actors": item.get("s", "").split(", ") if "s" in item else [],
-        })
-    return {"count": len(movies), "items": movies}
-
+# --- TOP MOVIES ---
 
 @app.get("/top_movies")
 def top_movies():
-    """Fetch top IMDb movies via keyword"""
-    data = imdb_json("t", "top rated")
-    if not data or "d" not in data:
-        return {"count": 0, "items": []}
+    """Scrape IMDb Top 250 Movies."""
+    try:
+        soup = fetch_html("https://www.imdb.com/chart/top/")
+        delay()
+        movies = []
+        for row in soup.select("li.ipc-metadata-list-summary-item")[:20]:
+            title_el = row.select_one("h3")
+            rating_el = row.select_one("span.ipc-rating-star")
+            image_el = row.select_one("img")
+            imdb_id = None
+            a_tag = row.select_one("a.ipc-title-link-wrapper")
+            if a_tag and "href" in a_tag.attrs:
+                imdb_id = a_tag["href"].split("/")[2]
+            movies.append({
+                "title": title_el.text.strip() if title_el else None,
+                "rating": rating_el.text.strip() if rating_el else None,
+                "imdb_id": imdb_id,
+                "image": image_el["src"] if image_el else None
+            })
+        return {"count": len(movies), "items": movies}
+    except Exception as e:
+        return {"error": str(e)}
 
-    movies = []
-    for item in data["d"]:
-        movies.append({
-            "title": item.get("l", "N/A"),
-            "year": item.get("y", "N/A"),
-            "imdb_id": item.get("id"),
-            "type": item.get("q", "N/A"),
-            "image": item.get("i", {}).get("imageUrl") if "i" in item else "",
-            "actors": item.get("s", "").split(", ") if "s" in item else [],
-        })
-    return {"count": len(movies), "items": movies}
+# --- TOP TV SHOWS ---
+
+@app.get("/top_tv")
+def top_tv():
+    """Scrape IMDb Top 250 TV shows."""
+    try:
+        soup = fetch_html("https://www.imdb.com/chart/toptv/")
+        delay()
+        shows = []
+        for row in soup.select("li.ipc-metadata-list-summary-item")[:20]:
+            title_el = row.select_one("h3")
+            rating_el = row.select_one("span.ipc-rating-star")
+            image_el = row.select_one("img")
+            imdb_id = None
+            a_tag = row.select_one("a.ipc-title-link-wrapper")
+            if a_tag and "href" in a_tag.attrs:
+                imdb_id = a_tag["href"].split("/")[2]
+            shows.append({
+                "title": title_el.text.strip() if title_el else None,
+                "rating": rating_el.text.strip() if rating_el else None,
+                "imdb_id": imdb_id,
+                "image": image_el["src"] if image_el else None
+            })
+        return {"count": len(shows), "items": shows}
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- COMING SOON ---
+
+@app.get("/coming_soon")
+def coming_soon():
+    """Use IMDb mirror for upcoming movies."""
+    try:
+        url = "https://imdb.iamidiotareyoutoo.com/upcoming"
+        res = requests.get(url, headers=HEADERS)
+        data = res.json()
+        items = [{
+            "title": m.get("title"),
+            "release": m.get("release"),
+            "imdb_id": m.get("id"),
+            "image": m.get("poster"),
+        } for m in data.get("results", [])]
+        return {"count": len(items), "items": items}
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- BY GENRE ---
+
+@app.get("/by_genre/{genre}")
+def by_genre(genre: str):
+    """Fetch movies by genre using IMDb mirror."""
+    try:
+        url = f"https://imdb.iamidiotareyoutoo.com/genre/{genre.lower()}"
+        res = requests.get(url, headers=HEADERS)
+        data = res.json()
+        items = [{
+            "title": m.get("title"),
+            "year": m.get("year"),
+            "rating": m.get("rating"),
+            "imdb_id": m.get("id"),
+            "image": m.get("poster"),
+        } for m in data.get("results", [])]
+        return {"count": len(items), "items": items}
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- ACTOR INFO ---
+
+@app.get("/actor/{actor_name}")
+def actor(actor_name: str):
+    """Search for actor and get info."""
+    try:
+        url = f"https://imdb.iamidiotareyoutoo.com/search?q={actor_name}"
+        res = requests.get(url, headers=HEADERS)
+        data = res.json()
+        if "results" not in data or len(data["results"]) == 0:
+            return {"error": "No actor found"}
+        person = next((x for x in data["results"] if x["type"] == "person"), None)
+        if not person:
+            return {"error": "No person found"}
+        return {
+            "name": person.get("title"),
+            "imdb_id": person.get("id"),
+            "image": person.get("poster"),
+            "known_for": person.get("known_for", []),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 
 
 # Run the API (for Railway/Render)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
