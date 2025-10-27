@@ -4,7 +4,6 @@ import requests
 from bs4 import BeautifulSoup
 import random
 import time
-import os
 
 app = FastAPI(title="IMDb Hybrid Scraper API", version="2.0")
 
@@ -220,9 +219,12 @@ def actor(actor_name: str):
 
 
 
-# Run the API (for Railway/Render)
 if __name__ == "__main__":
+    import os
+    import uvicorn
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
+
 
 
