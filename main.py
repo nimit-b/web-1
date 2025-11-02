@@ -199,24 +199,38 @@ async def actor(name: str):
 
 @app.get("/by_genre/{genre}")
 async def by_genre(genre: str):
-    mobile_url = f"https://m.imdb.com/search/title/?genres={genre}&sort=moviemeter,asc"
-    tree = await fetch(mobile_url)
+    url = f"{BASE_URL}/search/title/?genres={genre}&sort=moviemeter,asc"
+    tree = await fetch(url)
     items = []
 
-    for card in tree.css("div.media") or tree.css("div.lister-item"):
-        title_tag = card.css_first("a")
-        href = title_tag.attributes.get("href", "") if title_tag else ""
-        imdb_id = extract_id(href)
-        img_tag = card.css_first("img")
-        rating_tag = card.css_first(".rating-rating .value")
+    # IMDb uses slightly changing classnames like ipc-metadata-list-summary-item--link or --baseAlt
+    selectors = [
+        "li.ipc-metadata-list-summary-item",
+        "li.ipc-metadata-list-summary-item--link",
+        "div.ipc-metadata-list-summary-item",
+        "div.ipc-metadata-list-summary-item--link",
+    ]
 
-        if imdb_id:
-            items.append({
-                "title": title_tag.text(strip=True) if title_tag else None,
-                "imdb_id": imdb_id,
-                "image": img_tag.attributes.get("src") if img_tag else None,
-                "rating": rating_tag.text(strip=True) if rating_tag else None,
-            })
+    nodes = []
+    for s in selectors:
+        nodes = tree.css(s)
+        if nodes:
+            break  # found valid selector
+
+    for li in nodes:
+        title_tag = li.css_first("h3, a.ipc-title-link, div.ipc-title")
+        href = li.css_first("a[href*='/title/']")
+        img = li.css_first("img")
+        imdb_id = extract_id(href.attributes.get("href", "")) if href else None
+
+        if not title_tag or not imdb_id:
+            continue
+
+        items.append({
+            "title": title_tag.text(strip=True),
+            "imdb_id": imdb_id,
+            "image": img.attributes.get("src") if img else None,
+        })
 
     return {"count": len(items), "items": items[:50]}
 
@@ -226,6 +240,7 @@ if __name__ == "__main__":
     import uvicorn, os
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
