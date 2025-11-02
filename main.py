@@ -197,65 +197,67 @@ async def actor(name: str):
     }
 
 
+import json
+
 @app.get("/by_genre/{genre}")
 async def by_genre(genre: str):
     """
-    Fetch movies by genre from IMDb (supports classic + new layouts).
+    Fetch movies by genre from IMDb.
+    Supports classic HTML + JSON data embedded in the new React layout.
     """
     url = f"{BASE_URL}/search/title/?genres={genre}&sort=moviemeter,asc"
     tree = await fetch(url)
     items = []
 
-    # --- Classic IMDb "lister-item" layout ---
+    # --- Old layout (.lister-item.mode-advanced) ---
     for div in tree.css("div.lister-item.mode-advanced"):
         title_tag = div.css_first("h3 a")
         year_tag = div.css_first("span.lister-item-year")
+        rating_tag = div.css_first("strong")
         img_tag = div.css_first("img")
-        rating_tag = div.css_first("div.inline-block.ratings-imdb-rating strong")
 
-        title = title_tag.text(strip=True) if title_tag else None
-        href = title_tag.attributes.get("href", "") if title_tag else ""
-        imdb_id = extract_id(href)
-        image = (
-            img_tag.attributes.get("loadlate")
-            or img_tag.attributes.get("src")
-            if img_tag
-            else None
-        )
-        rating = rating_tag.text(strip=True) if rating_tag else None
+        if not title_tag:
+            continue
 
-        if imdb_id and title:
-            items.append({
-                "title": title,
-                "year": year_tag.text(strip=True) if year_tag else None,
-                "imdb_id": imdb_id,
-                "image": image,
-                "rating": rating
-            })
+        imdb_id = extract_id(title_tag.attributes.get("href", ""))
+        items.append({
+            "title": title_tag.text(strip=True),
+            "year": year_tag.text(strip=True) if year_tag else None,
+            "imdb_id": imdb_id,
+            "rating": rating_tag.text(strip=True) if rating_tag else None,
+            "image": img_tag.attributes.get("loadlate") if img_tag else None,
+        })
 
-    # --- New IMDb React layout (fallback) ---
+    # --- New React JSON fallback ---
     if not items:
-        for li in tree.css("li.ipc-metadata-list-summary-item"):
-            title_tag = li.css_first("h3, a.ipc-title-link")
-            href_tag = li.css_first("a.ipc-title-link")
-            img_tag = li.css_first("img")
-            rating_tag = li.css_first("span.ipc-rating-star--imdb, span.ipc-rating-star")
+        raw_json = None
+        for script in tree.css("script"):
+            text = script.text()
+            if text and "IMDbReactInitialState" in text:
+                try:
+                    json_str = text.split("IMDbReactInitialState.push(")[-1].split(");")[0]
+                    raw_json = json.loads(json_str)
+                    break
+                except Exception:
+                    continue
 
-            title = title_tag.text(strip=True) if title_tag else ""
-            href = href_tag.attributes.get("href", "") if href_tag else ""
-            imdb_id = extract_id(href)
-            image = img_tag.attributes.get("src") if img_tag else None
-            rating = rating_tag.text(strip=True) if rating_tag else None
-
-            if imdb_id and title:
-                items.append({
-                    "title": title,
-                    "imdb_id": imdb_id,
-                    "image": image,
-                    "rating": rating
-                })
+        if raw_json:
+            # This depends on IMDb’s internal JSON structure
+            for item in raw_json.get("titles", []):
+                imdb_id = item.get("id")
+                title = item.get("titleText", {}).get("text")
+                image = item.get("primaryImage", {}).get("url")
+                rating = item.get("ratingsSummary", {}).get("aggregateRating")
+                if imdb_id and title:
+                    items.append({
+                        "title": title,
+                        "imdb_id": imdb_id,
+                        "image": image,
+                        "rating": rating,
+                    })
 
     return {"count": len(items), "items": items[:50]}
+
 
 
 # --- For Railway / Render ---
@@ -263,6 +265,7 @@ if __name__ == "__main__":
     import uvicorn, os
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
