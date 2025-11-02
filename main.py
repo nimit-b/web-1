@@ -199,20 +199,61 @@ async def actor(name: str):
 
 @app.get("/by_genre/{genre}")
 async def by_genre(genre: str):
+    """
+    Fetches movies by genre from IMDb.
+    Supports both classic and modern layouts.
+    """
     url = f"{BASE_URL}/search/title/?genres={genre}&sort=moviemeter,asc"
     tree = await fetch(url)
     items = []
-    for li in tree.css("li.ipc-metadata-list-summary-item"):
-        title_tag = li.css_first("h3")
-        href = li.css_first("a.ipc-title-link")
-        imdb_id = extract_id(href.attributes.get("href", "")) if href else None
-        img = li.css_first("img")
-        items.append({
-            "title": title_tag.text(strip=True) if title_tag else "",
-            "imdb_id": imdb_id,
-            "image": img.attributes.get("src") if img else None
-        })
-    return {"count": len(items), "items": items}
+
+    # --- New IMDb React layout ---
+    new_layout = tree.css("li.ipc-metadata-list-summary-item")
+    if new_layout:
+        for li in new_layout:
+            title_tag = li.css_first("h3, h4, a.ipc-title-link")
+            href_tag = li.css_first("a.ipc-title-link")
+            rating_tag = li.css_first("span.ipc-rating-star--imdb, span.ipc-rating-star")
+            img_tag = li.css_first("img")
+
+            title = title_tag.text(strip=True) if title_tag else ""
+            href = href_tag.attributes.get("href", "") if href_tag else ""
+            imdb_id = extract_id(href)
+            image = img_tag.attributes.get("src") if img_tag else None
+            rating = rating_tag.text(strip=True) if rating_tag else None
+
+            if imdb_id:
+                items.append({
+                    "title": title,
+                    "imdb_id": imdb_id,
+                    "image": image,
+                    "rating": rating
+                })
+
+    # --- Classic IMDb layout (fallback) ---
+    if not items:
+        for div in tree.css("div.lister-item.mode-advanced"):
+            title_tag = div.css_first("h3 a")
+            year_tag = div.css_first("span.lister-item-year")
+            img_tag = div.css_first("img")
+            rating_tag = div.css_first("div.inline-block.ratings-imdb-rating strong")
+
+            title = title_tag.text(strip=True) if title_tag else ""
+            href = title_tag.attributes.get("href", "") if title_tag else ""
+            imdb_id = extract_id(href)
+            image = img_tag.attributes.get("loadlate") or img_tag.attributes.get("src") if img_tag else None
+            rating = rating_tag.text(strip=True) if rating_tag else None
+
+            if imdb_id:
+                items.append({
+                    "title": title,
+                    "year": year_tag.text(strip=True) if year_tag else None,
+                    "imdb_id": imdb_id,
+                    "image": image,
+                    "rating": rating
+                })
+
+    return {"count": len(items), "items": items[:50]}
 
 
 # --- For Railway / Render ---
@@ -220,4 +261,5 @@ if __name__ == "__main__":
     import uvicorn, os
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
