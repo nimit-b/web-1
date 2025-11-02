@@ -197,40 +197,28 @@ async def actor(name: str):
     }
 
 
-import json
-
 @app.get("/by_genre/{genre}")
 async def by_genre(genre: str):
-    url = f"{BASE_URL}/search/title/?genres={genre}&sort=moviemeter,asc"
-    tree = await fetch(url)
+    mobile_url = f"https://m.imdb.com/search/title/?genres={genre}&sort=moviemeter,asc"
+    tree = await fetch(mobile_url)
     items = []
 
-    # look for the Next.js JSON blob
-    script = tree.css_first("script#__NEXT_DATA__")
-    if script:
-        try:
-            data = json.loads(script.text())
-            # navigate through IMDb's nested JSON; structure may vary slightly
-            sections = data.get("props", {}).get("pageProps", {}).get("pageData", {}).get("sections", [])
-            for section in sections:
-                for item in section.get("items", []):
-                    title = item.get("titleText", {}).get("text")
-                    imdb_id = item.get("id")
-                    image = item.get("primaryImage", {}).get("url")
-                    rating = item.get("ratingsSummary", {}).get("aggregateRating")
-                    if imdb_id and title:
-                        items.append({
-                            "title": title,
-                            "imdb_id": imdb_id,
-                            "image": image,
-                            "rating": rating
-                        })
-        except Exception as e:
-            print("JSON parse error:", e)
+    for card in tree.css("div.media") or tree.css("div.lister-item"):
+        title_tag = card.css_first("a")
+        href = title_tag.attributes.get("href", "") if title_tag else ""
+        imdb_id = extract_id(href)
+        img_tag = card.css_first("img")
+        rating_tag = card.css_first(".rating-rating .value")
+
+        if imdb_id:
+            items.append({
+                "title": title_tag.text(strip=True) if title_tag else None,
+                "imdb_id": imdb_id,
+                "image": img_tag.attributes.get("src") if img_tag else None,
+                "rating": rating_tag.text(strip=True) if rating_tag else None,
+            })
 
     return {"count": len(items), "items": items[:50]}
-
-
 
 
 # --- For Railway / Render ---
@@ -238,6 +226,7 @@ if __name__ == "__main__":
     import uvicorn, os
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 
 
