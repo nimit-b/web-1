@@ -3,4 +3,5 @@ uvicorn
 httpx
 selectolax
 beautifulsoup4
+gunicorn
 
