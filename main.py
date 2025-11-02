@@ -152,21 +152,48 @@ async def upcoming():
 
 @app.get("/actor/{name}")
 async def actor(name: str):
+    # Step 1 — search IMDb for the actor
     url = f"{BASE_URL}/find/?q={name}&s=nm"
     tree = await fetch(url)
-    actor_tag = tree.css_first("td.result_text a")
+
+    # IMDb changed layout: look for modern React list class
+    actor_tag = tree.css_first("a.ipc-metadata-list-summary-item__t")
+    if not actor_tag:
+        # fallback for classic layout
+        actor_tag = tree.css_first("td.result_text a")
+
     if not actor_tag:
         return {"error": "Actor not found"}
+
     href = actor_tag.attributes.get("href", "")
-    actor_id = re.search(r"/name/(nm\d+)/", href).group(1)
+    match = re.search(r"/name/(nm\d+)/", href)
+    if not match:
+        return {"error": "Actor ID not found"}
+
+    actor_id = match.group(1)
+    actor_name = actor_tag.text(strip=True)
+
+    # Step 2 — open actor profile
     profile = await fetch(f"{BASE_URL}/name/{actor_id}/")
-    known = [a.text(strip=True) for a in profile.css("a.ipc-primary-image-list-card__title")]
+
+    # Get profile image (most reliable)
     img = profile.css_first("img.ipc-image")
+    image_url = img.attributes.get("src") if img else None
+
+    # Get “Known For” titles (updated selector)
+    known_for = []
+    for a in profile.css("a.ipc-primary-image-list-card__title, a.ipc-metadata-list-summary-item__t"):
+        title = a.text(strip=True)
+        href = a.attributes.get("href", "")
+        imdb_id = extract_id(href)
+        if title and imdb_id:
+            known_for.append({"title": title, "imdb_id": imdb_id})
+
     return {
-        "name": actor_tag.text(strip=True),
+        "name": actor_name,
         "imdb_id": actor_id,
-        "image": img.attributes.get("src") if img else None,
-        "known_for": known
+        "image": image_url,
+        "known_for": known_for[:10]
     }
 
 
@@ -193,3 +220,4 @@ if __name__ == "__main__":
     import uvicorn, os
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
